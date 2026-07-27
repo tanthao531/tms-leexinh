@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+:root {
+  --color-navy: #0e2a32;
+  --color-teal: #1b5e63;
+  --color-teal-light: #3f8b8f;
+  --color-sand: #e8dcc6;
+  --color-sand-light: #f5efe1;
+  --color-coral: #ee7a54;
+  --color-coral-dark: #d9603c;
+  --color-ivory: #fbf8f2;
+  --color-ink: #1a2323;
+  --color-ink-soft: #4b5b5b;
+}
+
+@theme inline {
+  --color-navy: var(--color-navy);
+  --color-teal: var(--color-teal);
+  --color-teal-light: var(--color-teal-light);
+  --color-sand: var(--color-sand);
+  --color-sand-light: var(--color-sand-light);
+  --color-coral: var(--color-coral);
+  --color-coral-dark: var(--color-coral-dark);
+  --color-ivory: var(--color-ivory);
+  --color-ink: var(--color-ink);
+  --color-ink-soft: var(--color-ink-soft);
+
+  --font-display: var(--font-fraunces);
+  --font-sans: var(--font-be-vietnam);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--color-ivory);
+  color: var(--color-ink);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-display), Georgia, serif;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-coral);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.wave-mask {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1440 60' preserveAspectRatio='none'%3E%3Cpath d='M0 30 Q 180 0 360 30 T 720 30 T 1080 30 T 1440 30 V60 H0 Z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1440 60' preserveAspectRatio='none'%3E%3Cpath d='M0 30 Q 180 0 360 30 T 720 30 T 1080 30 T 1440 30 V60 H0 Z'/%3E%3C/svg%3E");
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+}
+
+@keyframes kenburns {
+  0% { transform: scale(1) translate(0, 0); }
+  100% { transform: scale(1.1) translate(-1%, -1%); }
+}
+
+.animate-kenburns {
+  animation: kenburns 14s ease-in-out infinite alternate;
+}
+
+/* Hiệu ứng xuất hiện CHỈ BẰNG CSS — chạy ngay khi tải trang, không phụ
+   thuộc JavaScript. Dùng cho khu vực hero để chữ tiêu đề luôn hiển thị
+   ngay lập tức (tốt cho tốc độ hiển thị & điểm SEO Core Web Vitals). */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.8s ease-out both;
+}
