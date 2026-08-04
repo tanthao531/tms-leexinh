@@ -10,7 +10,7 @@
  * che mất nút "Gọi ngay / Zalo / Đặt phòng".
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { siteConfig } from "@/lib/site-config";
 
 interface Message {
@@ -31,8 +31,107 @@ const LOI_CHAO: Message = {
   content: `Xin chào! Mình là trợ lý ảo của ${siteConfig.shortName}. Bạn muốn hỏi về căn hộ, tiện ích hay đường đi tới chỗ mình?`,
 };
 
+/** 👉 Câu nhắc hiện cạnh nút để gây chú ý. */
+const LOI_NHAC = "Cần tư vấn? Hỏi mình nhé 👋";
+
+/** Các mốc thời gian (ms) nút sẽ rung để nhắc khách, tính từ lúc tải trang. */
+const MOC_NHAC = [4000, 20000, 45000];
+
+/* ------------------------------------------------------------------ */
+/* BIẾN CHỮ THÀNH LINK NHẤP ĐƯỢC                                       */
+/* ------------------------------------------------------------------ */
+
+const SDT = siteConfig.contact.phoneDisplay;
+const SDT_ESCAPED = SDT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Bắt 3 dạng cùng lúc:
+ *  1. Link kiểu markdown:  [Xem căn hộ](https://...)
+ *  2. Link trần:            https://...
+ *  3. Số điện thoại của site (để bấm gọi ngay trên di động)
+ */
+const MAU_LINK = new RegExp(
+  "\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)" +
+    "|(https?:\\/\\/[^\\s<>\"')\\]]+)" +
+    `|(${SDT_ESCAPED})`,
+  "g",
+);
+
+/** Tách dấu câu dính ở cuối URL: "trang.com." → ["trang.com", "."] */
+function tachDauCuoi(url: string): [string, string] {
+  const thua = url.match(/[.,;:!?)\]}"']+$/);
+  if (!thua) return [url, ""];
+  return [url.slice(0, url.length - thua[0].length), thua[0]];
+}
+
+const LOP_LINK =
+  "font-semibold text-teal underline underline-offset-2 break-words hover:text-teal-light";
+
+/** Chuyển chuỗi trả lời của AI thành mảng node, trong đó link là thẻ <a>. */
+function boLink(text: string): ReactNode[] {
+  const ket: ReactNode[] = [];
+  const re = new RegExp(MAU_LINK.source, "g");
+  let viTri = 0;
+  let dem = 0;
+  let khop: RegExpExecArray | null;
+
+  while ((khop = re.exec(text)) !== null) {
+    if (khop.index > viTri) ket.push(text.slice(viTri, khop.index));
+
+    const nhan = khop[1];
+    const urlMarkdown = khop[2];
+    const urlTran = khop[3];
+    const soDienThoai = khop[4];
+
+    if (soDienThoai) {
+      ket.push(
+        <a key={`p${dem++}`} href={`tel:${siteConfig.contact.phoneHref}`} className={LOP_LINK}>
+          {soDienThoai}
+        </a>,
+      );
+    } else if (urlMarkdown) {
+      ket.push(
+        <a
+          key={`m${dem++}`}
+          href={urlMarkdown}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={LOP_LINK}
+        >
+          {nhan}
+        </a>,
+      );
+    } else if (urlTran) {
+      const [sach, thua] = tachDauCuoi(urlTran);
+      ket.push(
+        <a
+          key={`u${dem++}`}
+          href={sach}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={LOP_LINK}
+        >
+          {sach}
+        </a>,
+      );
+      if (thua) ket.push(thua);
+    }
+
+    viTri = khop.index + khop[0].length;
+  }
+
+  if (viTri < text.length) ket.push(text.slice(viTri));
+  return ket;
+}
+
+/* ------------------------------------------------------------------ */
+
 export default function ChatWidget() {
   const [moRong, setMoRong] = useState(false);
+  const [daTungMo, setDaTungMo] = useState(false);
+  const [dangLac, setDangLac] = useState(false);
+  const [hienNhac, setHienNhac] = useState(false);
+
   const [messages, setMessages] = useState<Message[]>([LOI_CHAO]);
   const [input, setInput] = useState("");
   const [dangGui, setDangGui] = useState(false);
@@ -60,6 +159,36 @@ export default function ChatWidget() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [moRong]);
+
+  /**
+   * Rung nút + hiện lời nhắc ở vài mốc thời gian để khách để ý.
+   * Chỉ chạy khi khách CHƯA từng mở chat — mở rồi thì thôi, không làm
+   * phiền nữa. Người bật "giảm chuyển động" trong hệ điều hành sẽ không
+   * thấy rung (đã xử lý sẵn ở globals.css) nhưng vẫn thấy lời nhắc.
+   */
+  useEffect(() => {
+    if (daTungMo) return;
+
+    const hen: ReturnType<typeof setTimeout>[] = [];
+    for (const moc of MOC_NHAC) {
+      hen.push(
+        setTimeout(() => {
+          setDangLac(true);
+          setHienNhac(true);
+          hen.push(setTimeout(() => setDangLac(false), 1000));
+          hen.push(setTimeout(() => setHienNhac(false), 6000));
+        }, moc),
+      );
+    }
+    return () => hen.forEach(clearTimeout);
+  }, [daTungMo]);
+
+  const doiTrangThai = useCallback(() => {
+    setMoRong((v) => !v);
+    setDaTungMo(true);
+    setDangLac(false);
+    setHienNhac(false);
+  }, []);
 
   const gui = useCallback(
     async (noiDung: string) => {
@@ -101,28 +230,45 @@ export default function ChatWidget() {
 
   return (
     <>
-      {/* Nút mở/đóng */}
-      <button
-        type="button"
-        onClick={() => setMoRong((v) => !v)}
-        aria-label={moRong ? "Đóng khung chat" : "Mở khung chat hỏi đáp"}
-        aria-expanded={moRong}
-        className="fixed right-4 bottom-20 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-coral text-white shadow-lg shadow-navy/20 transition hover:bg-coral-dark active:scale-95 lg:bottom-6"
-      >
-        {moRong ? (
-          <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6L6 18" />
-          </svg>
-        ) : (
-          <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={1.8}>
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M8.25 10.5h7.5M8.25 13.5h4.5M21 12c0 4.556-4.03 8.25-9 8.25a9.76 9.76 0 01-3.6-.68L3 21l1.26-3.78A8.19 8.19 0 013 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"
-            />
-          </svg>
+      {/* Nút mở/đóng + lời nhắc */}
+      <div className="fixed right-4 bottom-20 z-50 flex items-center gap-2 lg:bottom-6">
+        {hienNhac && !moRong && (
+          <span className="animate-fade-up rounded-full border border-navy/10 bg-white px-3.5 py-2 text-xs font-medium whitespace-nowrap text-navy shadow-lg shadow-navy/10">
+            {LOI_NHAC}
+          </span>
         )}
-      </button>
+
+        <button
+          type="button"
+          onClick={doiTrangThai}
+          aria-label={moRong ? "Đóng khung chat" : "Mở khung chat hỏi đáp"}
+          aria-expanded={moRong}
+          className={`relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-coral text-white shadow-lg shadow-navy/20 transition hover:bg-coral-dark active:scale-95 ${
+            dangLac ? "animate-lac-nut" : ""
+          }`}
+        >
+          {/* Vòng sáng lan ra khi nút rung */}
+          {dangLac && !moRong && (
+            <span className="absolute inset-0 animate-ping rounded-full bg-coral opacity-60" />
+          )}
+
+          <span className="relative">
+            {moRong ? (
+              <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={1.8}>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M8.25 10.5h7.5M8.25 13.5h4.5M21 12c0 4.556-4.03 8.25-9 8.25a9.76 9.76 0 01-3.6-.68L3 21l1.26-3.78A8.19 8.19 0 013 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"
+                />
+              </svg>
+            )}
+          </span>
+        </button>
+      </div>
 
       {/* Khung chat */}
       {moRong && (
@@ -153,7 +299,7 @@ export default function ChatWidget() {
                       : "max-w-[85%] rounded-2xl rounded-bl-sm bg-sand-light px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-ink"
                   }
                 >
-                  {m.content}
+                  {m.role === "assistant" ? boLink(m.content) : m.content}
                 </p>
               </div>
             ))}
