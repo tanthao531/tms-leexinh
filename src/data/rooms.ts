@@ -53,7 +53,7 @@ export const rooms: RoomType[] = [
     area: "55 m²",
     capacity: "3-4 khách",
     bedConfig: "2 giường đôi",
-    view: "Hướng biên và thành phố",
+    view: "Hướng biển và thành phố",
     amenities: [
       "Bếp đầy đủ dụng cụ nấu ăn",
       "Máy giặt riêng",

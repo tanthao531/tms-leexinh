@@ -4,6 +4,7 @@ import "./globals.css";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import StickyContactBar from "@/components/StickyContactBar";
+import ChatWidget from "@/components/ChatWidget";
 import { LodgingJsonLd } from "@/components/JsonLd";
 import { siteConfig } from "@/lib/site-config";
 
@@ -76,6 +77,7 @@ export default function RootLayout({
         <main className="flex-1">{children}</main>
         <Footer />
         <StickyContactBar />
+        <ChatWidget />
       </body>
     </html>
   );
