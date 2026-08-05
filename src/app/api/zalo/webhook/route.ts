@@ -51,12 +51,38 @@ function themVaoLichSu(userId: string, msg: ChatMessage) {
 function chuKyHopLe(rawBody: string, timestamp: string, signature: string | null): boolean {
   const appId = process.env.ZALO_APP_ID;
   const oaSecretKey = process.env.ZALO_OA_SECRET_KEY || process.env.ZALO_APP_SECRET;
-  if (!appId || !oaSecretKey || !signature || !timestamp) return false;
+  if (!appId || !oaSecretKey || !signature || !timestamp) {
+    console.error(
+      "[zalo][debug] Thiếu dữ liệu để verify:",
+      JSON.stringify({
+        coAppId: Boolean(appId),
+        coOaSecretKey: Boolean(oaSecretKey),
+        coSignature: Boolean(signature),
+        coTimestamp: Boolean(timestamp),
+      }),
+    );
+    return false;
+  }
 
   const expected = crypto
     .createHash("sha256")
     .update(appId + rawBody + timestamp + oaSecretKey)
     .digest("hex");
+
+  // 🔧 LOG TẠM THỜI ĐỂ DEBUG — xoá sau khi xác định xong nguyên nhân.
+  console.error(
+    "[zalo][debug] So sánh chữ ký:",
+    JSON.stringify({
+      appId,
+      oaSecretKey8kyTuDau: oaSecretKey.slice(0, 8),
+      timestamp,
+      rawBodyDoDai: rawBody.length,
+      expected8kyTuDau: expected.slice(0, 8),
+      received8kyTuDau: signature.slice(0, 8),
+      expectedDoDai: expected.length,
+      receivedDoDai: signature.length,
+    }),
+  );
 
   try {
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
