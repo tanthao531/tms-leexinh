@@ -62,30 +62,54 @@ function chuKyHopLe(
   rawBody: string,
   timestamp: string,
   signatureHeader: string | null,
-  oaId: string | undefined,
+  appId: string | undefined,
 ): boolean {
   const oaSecretKey = process.env.ZALO_OA_SECRET_KEY || process.env.ZALO_APP_SECRET;
-  if (!oaId || !oaSecretKey || !signatureHeader || !timestamp) return false;
+  if (!appId || !oaSecretKey || !signatureHeader || !timestamp) {
+    console.error(
+      "[zalo][debug3] Thiếu dữ liệu:",
+      JSON.stringify({ coAppId: Boolean(appId), coSecret: Boolean(oaSecretKey), coSig: Boolean(signatureHeader), coTs: Boolean(timestamp) }),
+    );
+    return false;
+  }
 
   const signature = signatureHeader.startsWith("mac=") ? signatureHeader.slice(4) : signatureHeader;
 
-  const expected = crypto
-    .createHash("sha256")
-    .update(oaId + rawBody + timestamp + oaSecretKey)
-    .digest("hex");
+  // Thử nhiều biến thể công thức cùng lúc để xác định đúng công thức
+  // mà không cần thêm 1 vòng deploy nữa.
+  const bienThe: Record<string, string> = {
+    appId_body_ts_secret: appId + rawBody + timestamp + oaSecretKey,
+    secret_appId_body_ts: oaSecretKey + appId + rawBody + timestamp,
+    appId_ts_body_secret: appId + timestamp + rawBody + oaSecretKey,
+    body_ts_secret: rawBody + timestamp + oaSecretKey,
+    appId_body_secret: appId + rawBody + oaSecretKey,
+  };
+
+  const ketQua: Record<string, string> = {};
+  let khopVoi: string | null = null;
+  for (const [ten, chuoi] of Object.entries(bienThe)) {
+    const hash = crypto.createHash("sha256").update(chuoi).digest("hex");
+    ketQua[ten] = hash.slice(0, 8);
+    if (hash === signature) khopVoi = ten;
+  }
 
   // 🔧 LOG TẠM THỜI — xoá sau khi xác nhận công thức đúng.
   console.error(
-    "[zalo][debug2]",
+    "[zalo][debug3]",
     JSON.stringify({
-      oaId,
+      appId,
       oaSecretKey8: oaSecretKey.slice(0, 8),
       timestamp,
       rawBodyLen: rawBody.length,
-      expected8: expected.slice(0, 8),
       received8: signature.slice(0, 8),
+      receivedLen: signature.length,
+      ketQua,
+      khopVoi,
     }),
   );
+
+  if (!khopVoi) return false;
+  const expected = crypto.createHash("sha256").update(bienThe[khopVoi]).digest("hex");
 
   try {
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
@@ -154,7 +178,7 @@ export async function POST(req: Request) {
   }
 
   const timestamp = payload.timestamp ?? "";
-  const hopLe = chuKyHopLe(rawBody, timestamp, signatureHeader, payload.oa_id);
+  const hopLe = chuKyHopLe(rawBody, timestamp, signatureHeader, payload.app_id);
 
   if (!hopLe) {
     console.error(
