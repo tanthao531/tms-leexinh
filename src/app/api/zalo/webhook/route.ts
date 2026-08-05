@@ -58,17 +58,34 @@ function themVaoLichSu(userId: string, msg: ChatMessage) {
  * Header thực tế Zalo gửi có dạng "mac=<hash>", phải bỏ tiền tố "mac="
  * trước khi so sánh (đã xác nhận qua log debug thực tế).
  */
-function chuKyHopLe(rawBody: string, timestamp: string, signatureHeader: string | null): boolean {
-  const appId = process.env.ZALO_APP_ID;
+function chuKyHopLe(
+  rawBody: string,
+  timestamp: string,
+  signatureHeader: string | null,
+  oaId: string | undefined,
+): boolean {
   const oaSecretKey = process.env.ZALO_OA_SECRET_KEY || process.env.ZALO_APP_SECRET;
-  if (!appId || !oaSecretKey || !signatureHeader || !timestamp) return false;
+  if (!oaId || !oaSecretKey || !signatureHeader || !timestamp) return false;
 
   const signature = signatureHeader.startsWith("mac=") ? signatureHeader.slice(4) : signatureHeader;
 
   const expected = crypto
     .createHash("sha256")
-    .update(appId + rawBody + timestamp + oaSecretKey)
+    .update(oaId + rawBody + timestamp + oaSecretKey)
     .digest("hex");
+
+  // 🔧 LOG TẠM THỜI — xoá sau khi xác nhận công thức đúng.
+  console.error(
+    "[zalo][debug2]",
+    JSON.stringify({
+      oaId,
+      oaSecretKey8: oaSecretKey.slice(0, 8),
+      timestamp,
+      rawBodyLen: rawBody.length,
+      expected8: expected.slice(0, 8),
+      received8: signature.slice(0, 8),
+    }),
+  );
 
   try {
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
@@ -137,7 +154,7 @@ export async function POST(req: Request) {
   }
 
   const timestamp = payload.timestamp ?? "";
-  const hopLe = chuKyHopLe(rawBody, timestamp, signatureHeader);
+  const hopLe = chuKyHopLe(rawBody, timestamp, signatureHeader, payload.oa_id);
 
   if (!hopLe) {
     console.error(
