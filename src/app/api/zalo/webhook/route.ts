@@ -62,59 +62,97 @@ function chuKyHopLe(
   rawBody: string,
   timestamp: string,
   signatureHeader: string | null,
-  appId: string | undefined,
+  payload: ZaloEventPayload,
 ): boolean {
-  const oaSecretKey = process.env.ZALO_OA_SECRET_KEY || process.env.ZALO_APP_SECRET;
-  if (!appId || !oaSecretKey || !signatureHeader || !timestamp) {
-    console.error(
-      "[zalo][debug3] Thiếu dữ liệu:",
-      JSON.stringify({ coAppId: Boolean(appId), coSecret: Boolean(oaSecretKey), coSig: Boolean(signatureHeader), coTs: Boolean(timestamp) }),
-    );
+  const oaSecretKey = process.env.ZALO_OA_SECRET_KEY ?? "";
+  const appSecret = process.env.ZALO_APP_SECRET ?? "";
+  const appIdEnv = process.env.ZALO_APP_ID ?? "";
+
+  if (!signatureHeader || !timestamp) {
+    console.error("[zalo][debug4] Thiếu chữ ký hoặc timestamp.");
     return false;
   }
 
   const signature = signatureHeader.startsWith("mac=") ? signatureHeader.slice(4) : signatureHeader;
 
-  // Thử nhiều biến thể công thức cùng lúc để xác định đúng công thức
-  // mà không cần thêm 1 vòng deploy nữa.
-  const bienThe: Record<string, string> = {
-    appId_body_ts_secret: appId + rawBody + timestamp + oaSecretKey,
-    secret_appId_body_ts: oaSecretKey + appId + rawBody + timestamp,
-    appId_ts_body_secret: appId + timestamp + rawBody + oaSecretKey,
-    body_ts_secret: rawBody + timestamp + oaSecretKey,
-    appId_body_secret: appId + rawBody + oaSecretKey,
+  // Các nguồn ID có thể xuất hiện trong công thức
+  const nguonId: Record<string, string> = {
+    appIdPayload: payload.app_id ?? "",
+    appIdEnv,
+    recipientId: payload.recipient?.id ?? "", // chính là OA id
+    senderId: payload.sender?.id ?? "",
+    oaIdPayload: payload.oa_id ?? "",
+    rong: "",
+  };
+
+  const nguonKhoa: Record<string, string> = {
+    oaSecret: oaSecretKey,
+    appSecret,
   };
 
   const ketQua: Record<string, string> = {};
   let khopVoi: string | null = null;
-  for (const [ten, chuoi] of Object.entries(bienThe)) {
-    const hash = crypto.createHash("sha256").update(chuoi).digest("hex");
-    ketQua[ten] = hash.slice(0, 8);
-    if (hash === signature) khopVoi = ten;
+  let chuoiKhop: { chuoi: string; hmac: boolean; khoa: string } | null = null;
+
+  for (const [tenId, idVal] of Object.entries(nguonId)) {
+    if (!idVal && tenId !== "rong") continue;
+    for (const [tenKhoa, khoa] of Object.entries(nguonKhoa)) {
+      if (!khoa) continue;
+
+      const mauChuoi: Record<string, string> = {
+        "id+body+ts+key": idVal + rawBody + timestamp + khoa,
+        "id+body+ts": idVal + rawBody + timestamp,
+        "body+ts": rawBody + timestamp,
+      };
+
+      for (const [tenMau, chuoi] of Object.entries(mauChuoi)) {
+        // sha256 thường
+        const h1 = crypto.createHash("sha256").update(chuoi).digest("hex");
+        const ten1 = `${tenId}|${tenKhoa}|${tenMau}|sha256`;
+        ketQua[ten1] = h1.slice(0, 8);
+        if (h1 === signature) {
+          khopVoi = ten1;
+          chuoiKhop = { chuoi, hmac: false, khoa };
+        }
+
+        // HMAC-SHA256 với khoá
+        const h2 = crypto.createHmac("sha256", khoa).update(chuoi).digest("hex");
+        const ten2 = `${tenId}|${tenKhoa}|${tenMau}|hmac`;
+        ketQua[ten2] = h2.slice(0, 8);
+        if (h2 === signature) {
+          khopVoi = ten2;
+          chuoiKhop = { chuoi, hmac: true, khoa };
+        }
+      }
+    }
   }
 
-  // 🔧 LOG TẠM THỜI — xoá sau khi xác nhận công thức đúng.
   console.error(
-    "[zalo][debug3]",
+    "[zalo][debug4]",
     JSON.stringify({
-      appId,
-      oaSecretKey8: oaSecretKey.slice(0, 8),
-      timestamp,
-      rawBodyLen: rawBody.length,
       received8: signature.slice(0, 8),
       receivedLen: signature.length,
-      ketQua,
+      timestamp,
+      rawBodyLen: rawBody.length,
+      coOaSecret: Boolean(oaSecretKey),
+      coAppSecret: Boolean(appSecret),
       khopVoi,
     }),
   );
+  if (!khopVoi) {
+    console.error("[zalo][debug4] Bang ket qua:", JSON.stringify(ketQua));
+  }
 
-  if (!khopVoi) return false;
-  const expected = crypto.createHash("sha256").update(bienThe[khopVoi]).digest("hex");
+  if (!khopVoi || !chuoiKhop) return false;
+
+  const expected = chuoiKhop.hmac
+    ? crypto.createHmac("sha256", chuoiKhop.khoa).update(chuoiKhop.chuoi).digest("hex")
+    : crypto.createHash("sha256").update(chuoiKhop.chuoi).digest("hex");
 
   try {
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
   } catch {
-    return false; // độ dài khác nhau → chắc chắn không khớp
+    return false;
   }
 }
 
@@ -161,6 +199,7 @@ interface ZaloEventPayload {
   event_name?: string;
   timestamp?: string;
   sender?: { id?: string };
+  recipient?: { id?: string };
   message?: { text?: string; msg_id?: string };
 }
 
@@ -178,7 +217,7 @@ export async function POST(req: Request) {
   }
 
   const timestamp = payload.timestamp ?? "";
-  const hopLe = chuKyHopLe(rawBody, timestamp, signatureHeader, payload.app_id);
+  const hopLe = chuKyHopLe(rawBody, timestamp, signatureHeader, payload);
 
   if (!hopLe) {
     console.error(
