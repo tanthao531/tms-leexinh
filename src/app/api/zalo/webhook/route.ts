@@ -19,7 +19,7 @@
  * Cần Vercel KV đã kết nối vào project (xem src/lib/zalo-token.ts).
  */
 
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import crypto from "crypto";
 import { askClaude, LOI_CHUNG, type ChatMessage } from "@/lib/ai-reply";
 import { layAccessTokenHopLe } from "@/lib/zalo-token";
@@ -126,23 +126,27 @@ export async function POST(req: Request) {
     if (userId && text) {
       themVaoLichSu(userId, { role: "user", content: text });
 
-      try {
-        const reply = await askClaude(lichSuTheoKhach.get(userId)!);
-        themVaoLichSu(userId, { role: "assistant", content: reply });
-        await guiTinZalo(userId, reply);
-      } catch (err) {
-        console.error("[zalo] Lỗi khi hỏi Claude hoặc gửi tin:", err);
+      // QUAN TRỌNG: gọi Claude + gửi trả lời mất vài giây — Zalo chờ
+      // phản hồi HTTP quá lâu sẽ báo "Không thể kết nối với webhook".
+      // Dùng after() để trả 200 OK ngay lập tức, còn việc trả lời khách
+      // chạy "phía sau" sau khi response đã gửi xong.
+      after(async () => {
         try {
-          await guiTinZalo(userId, LOI_CHUNG);
-        } catch (errGui) {
-          // Không để lỗi gửi tin lần 2 làm sập cả request — Zalo cần
-          // luôn nhận 200 OK, dù bot không trả lời được lần này.
-          console.error("[zalo] Gửi tin báo lỗi cũng thất bại:", errGui);
+          const reply = await askClaude(lichSuTheoKhach.get(userId)!);
+          themVaoLichSu(userId, { role: "assistant", content: reply });
+          await guiTinZalo(userId, reply);
+        } catch (err) {
+          console.error("[zalo] Lỗi khi hỏi Claude hoặc gửi tin:", err);
+          try {
+            await guiTinZalo(userId, LOI_CHUNG);
+          } catch (errGui) {
+            console.error("[zalo] Gửi tin báo lỗi cũng thất bại:", errGui);
+          }
         }
-      }
+      });
     }
   }
 
-  // Luôn trả 200 cho Zalo biết đã nhận, kể cả những event không xử lý.
+  // Trả 200 ngay cho Zalo biết đã nhận — không chờ xử lý AI xong.
   return new NextResponse("OK", { status: 200 });
 }
