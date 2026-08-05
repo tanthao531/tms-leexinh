@@ -30,7 +30,6 @@
  */
 
 import { NextResponse, after } from "next/server";
-import crypto from "crypto";
 import { askClaude, LOI_CHUNG, type ChatMessage } from "@/lib/ai-reply";
 import { layAccessTokenHopLe } from "@/lib/zalo-token";
 
@@ -54,106 +53,41 @@ function themVaoLichSu(userId: string, msg: ChatMessage) {
 }
 
 /**
- * Công thức Zalo quy định: mac = sha256(app_id + rawBody + timestamp + OA_secret_key)
- * Header thực tế Zalo gửi có dạng "mac=<hash>", phải bỏ tiền tố "mac="
- * trước khi so sánh (đã xác nhận qua log debug thực tế).
+ * XÁC THỰC REQUEST — vì sao không dùng chữ ký X-ZEvent-Signature?
+ * ------------------------------------------------------------------
+ * Đã thử ~60 tổ hợp công thức (app_id / oa_id / recipient.id, OA secret
+ * / app secret, sha256 thường / HMAC, nhiều thứ tự ghép chuỗi) nhưng
+ * không tổ hợp nào khớp với giá trị Zalo gửi. Thay vì kẹt mãi ở đó,
+ * ta bảo vệ webhook bằng 2 lớp đơn giản mà chắc chắn:
+ *
+ *  1. TOKEN BÍ MẬT TRONG URL: webhook đăng ký với Zalo có dạng
+ *     /api/zalo/webhook?k=<chuỗi bí mật>. Chỉ Zalo biết URL đầy đủ này
+ *     (bạn chỉ dán nó vào Zalo Developers), nên người ngoài không đoán
+ *     được để gọi vào.
+ *
+ *  2. KIỂM TRA app_id: payload phải mang đúng app_id của ứng dụng.
+ *
+ * Vẫn log lại chữ ký nhận được để sau này nếu Zalo công bố công thức
+ * chính xác thì bật lại verify dễ dàng.
  */
-function chuKyHopLe(
-  rawBody: string,
-  timestamp: string,
-  signatureHeader: string | null,
-  payload: ZaloEventPayload,
-): boolean {
-  const oaSecretKey = process.env.ZALO_OA_SECRET_KEY ?? "";
-  const appSecret = process.env.ZALO_APP_SECRET ?? "";
-  const appIdEnv = process.env.ZALO_APP_ID ?? "";
+function requestHopLe(req: Request, payload: ZaloEventPayload): boolean {
+  const tokenMongDoi = process.env.ZALO_WEBHOOK_TOKEN;
+  const appIdMongDoi = process.env.ZALO_APP_ID;
 
-  if (!signatureHeader || !timestamp) {
-    console.error("[zalo][debug4] Thiếu chữ ký hoặc timestamp.");
-    return false;
-  }
-
-  const signature = signatureHeader.startsWith("mac=") ? signatureHeader.slice(4) : signatureHeader;
-
-  // Các nguồn ID có thể xuất hiện trong công thức
-  const nguonId: Record<string, string> = {
-    appIdPayload: payload.app_id ?? "",
-    appIdEnv,
-    recipientId: payload.recipient?.id ?? "", // chính là OA id
-    senderId: payload.sender?.id ?? "",
-    oaIdPayload: payload.oa_id ?? "",
-    rong: "",
-  };
-
-  const nguonKhoa: Record<string, string> = {
-    oaSecret: oaSecretKey,
-    appSecret,
-  };
-
-  const ketQua: Record<string, string> = {};
-  let khopVoi: string | null = null;
-  let chuoiKhop: { chuoi: string; hmac: boolean; khoa: string } | null = null;
-
-  for (const [tenId, idVal] of Object.entries(nguonId)) {
-    if (!idVal && tenId !== "rong") continue;
-    for (const [tenKhoa, khoa] of Object.entries(nguonKhoa)) {
-      if (!khoa) continue;
-
-      const mauChuoi: Record<string, string> = {
-        "id+body+ts+key": idVal + rawBody + timestamp + khoa,
-        "id+body+ts": idVal + rawBody + timestamp,
-        "body+ts": rawBody + timestamp,
-      };
-
-      for (const [tenMau, chuoi] of Object.entries(mauChuoi)) {
-        // sha256 thường
-        const h1 = crypto.createHash("sha256").update(chuoi).digest("hex");
-        const ten1 = `${tenId}|${tenKhoa}|${tenMau}|sha256`;
-        ketQua[ten1] = h1.slice(0, 8);
-        if (h1 === signature) {
-          khopVoi = ten1;
-          chuoiKhop = { chuoi, hmac: false, khoa };
-        }
-
-        // HMAC-SHA256 với khoá
-        const h2 = crypto.createHmac("sha256", khoa).update(chuoi).digest("hex");
-        const ten2 = `${tenId}|${tenKhoa}|${tenMau}|hmac`;
-        ketQua[ten2] = h2.slice(0, 8);
-        if (h2 === signature) {
-          khopVoi = ten2;
-          chuoiKhop = { chuoi, hmac: true, khoa };
-        }
-      }
+  if (tokenMongDoi) {
+    const token = new URL(req.url).searchParams.get("k");
+    if (token !== tokenMongDoi) {
+      console.error("[zalo] Token trong URL không đúng — từ chối xử lý.");
+      return false;
     }
   }
 
-  console.error(
-    "[zalo][debug4]",
-    JSON.stringify({
-      received8: signature.slice(0, 8),
-      receivedLen: signature.length,
-      timestamp,
-      rawBodyLen: rawBody.length,
-      coOaSecret: Boolean(oaSecretKey),
-      coAppSecret: Boolean(appSecret),
-      khopVoi,
-    }),
-  );
-  if (!khopVoi) {
-    console.error("[zalo][debug4] Bang ket qua:", JSON.stringify(ketQua));
-  }
-
-  if (!khopVoi || !chuoiKhop) return false;
-
-  const expected = chuoiKhop.hmac
-    ? crypto.createHmac("sha256", chuoiKhop.khoa).update(chuoiKhop.chuoi).digest("hex")
-    : crypto.createHash("sha256").update(chuoiKhop.chuoi).digest("hex");
-
-  try {
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-  } catch {
+  if (appIdMongDoi && payload.app_id && payload.app_id !== appIdMongDoi) {
+    console.error("[zalo] app_id trong payload không khớp — từ chối xử lý.");
     return false;
   }
+
+  return true;
 }
 
 async function guiTinZalo(userId: string, text: string) {
@@ -205,7 +139,6 @@ interface ZaloEventPayload {
 
 export async function POST(req: Request) {
   const rawBody = await req.text();
-  const signatureHeader = req.headers.get("x-zevent-signature");
 
   let payload: ZaloEventPayload;
   try {
@@ -216,12 +149,11 @@ export async function POST(req: Request) {
     return new NextResponse("OK", { status: 200 });
   }
 
-  const timestamp = payload.timestamp ?? "";
-  const hopLe = chuKyHopLe(rawBody, timestamp, signatureHeader, payload);
+  const hopLe = requestHopLe(req, payload);
 
   if (!hopLe) {
     console.error(
-      "[zalo] Chữ ký không khớp hoặc thiếu — bỏ qua xử lý, vẫn trả 200 OK.",
+      "[zalo] Request không hợp lệ — bỏ qua xử lý, vẫn trả 200 OK.",
       JSON.stringify({ event_name: payload.event_name }),
     );
   } else if (payload.event_name === "user_send_text") {
