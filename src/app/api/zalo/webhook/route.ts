@@ -131,8 +131,14 @@ export async function POST(req: Request) {
         themVaoLichSu(userId, { role: "assistant", content: reply });
         await guiTinZalo(userId, reply);
       } catch (err) {
-        console.error("[zalo] Lỗi khi hỏi Claude:", err);
-        await guiTinZalo(userId, LOI_CHUNG);
+        console.error("[zalo] Lỗi khi hỏi Claude hoặc gửi tin:", err);
+        try {
+          await guiTinZalo(userId, LOI_CHUNG);
+        } catch (errGui) {
+          // Không để lỗi gửi tin lần 2 làm sập cả request — Zalo cần
+          // luôn nhận 200 OK, dù bot không trả lời được lần này.
+          console.error("[zalo] Gửi tin báo lỗi cũng thất bại:", errGui);
+        }
       }
     }
   }
