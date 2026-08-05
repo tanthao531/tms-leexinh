@@ -63,7 +63,7 @@ export const metadata: Metadata = {
     googleBot: { index: true, follow: true },
   },
   // 👉 TODO: sau khi đăng ký Google Search Console, dán mã xác minh vào đây
-  verification: { google: "3X65X0Ngr7czv0m5AHCSsVkdS5gYme6GcuOoEuKeEBI" },
+  verification: { google: "8fyc3i5AJ1D2mZ0VbS98CLADfqDUNENw9EDEWg-DZfg" },
 };
 
 export default function RootLayout({
