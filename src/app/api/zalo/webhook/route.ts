@@ -109,9 +109,18 @@ export async function POST(req: Request) {
   }
 
   const timestamp = payload.timestamp ?? "";
-  if (!chuKyHopLe(rawBody, timestamp, signature)) {
-    console.error("[zalo] Chữ ký không hợp lệ — có thể là request giả mạo.");
-    return new NextResponse("Invalid signature", { status: 403 });
+  const chuKyOk = chuKyHopLe(rawBody, timestamp, signature);
+  if (!chuKyOk) {
+    // Không chặn cứng bằng 403 — request "Kiểm tra" của Zalo khi lưu
+    // Webhook URL không phải lúc nào cũng ký đúng định dạng sự kiện thật,
+    // và Zalo yêu cầu MỌI trường hợp phải trả 200 OK mới lưu được URL.
+    // Ghi log để so sánh/tìm đúng OA secret sau, nhưng vẫn trả 200 và
+    // KHÔNG xử lý nội dung (không gọi AI, không trả lời) cho an toàn.
+    console.error(
+      "[zalo] Chữ ký không khớp — bỏ qua xử lý sự kiện này.",
+      JSON.stringify({ event_name: payload.event_name, hasSignature: Boolean(signature) }),
+    );
+    return new NextResponse("OK", { status: 200 });
   }
 
   // Chỉ xử lý sự kiện khách gửi tin nhắn văn bản, bỏ qua các event khác
