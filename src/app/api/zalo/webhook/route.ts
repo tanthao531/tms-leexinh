@@ -3,20 +3,30 @@
  * trả lời bằng cùng trợ lý AI đang dùng cho website và Messenger
  * (dùng chung src/lib/ai-reply.ts).
  * ------------------------------------------------------------------
- * URL: /api/zalo/webhook  (chỉ có POST — Zalo không có bước GET verify
- * riêng như Facebook, nhưng có "Kiểm tra" gửi thử 1 request POST thật
- * khi bạn lưu URL trên Zalo Developers).
+ * URL: /api/zalo/webhook
  *
- * Biến môi trường cần có trong .env.local / Vercel:
+ * QUAN TRỌNG — 2 nguyên tắc bắt buộc để Zalo chấp nhận webhook này:
+ *
+ * 1. LUÔN trả 200 OK cho MỌI request, kể cả khi chữ ký không khớp.
+ *    Request "Kiểm tra" khi lưu URL, và nút "Test" gửi sự kiện giả lập,
+ *    không phải lúc nào cũng ký giống hệt tin nhắn thật — chặn cứng
+ *    bằng 403 sẽ khiến Zalo không cho lưu webhook. Khi chữ ký sai,
+ *    ta chỉ ÂM THẦM BỎ QUA xử lý (không gọi AI, không trả lời), không
+ *    từ chối cả request.
+ *
+ * 2. LUÔN trả response NGAY LẬP TỨC, không chờ gọi Claude/gửi tin
+ *    nhắn xong. Việc đó có thể mất vài giây — chờ xong mới trả 200 sẽ
+ *    bị Zalo coi là "Không thể kết nối" (timeout). Dùng after() của
+ *    Next.js để xử lý AI ở "phía sau", sau khi response đã gửi xong.
+ *
+ * Biến môi trường cần có trong Vercel:
  *  - ZALO_APP_ID           App ID (trang Cài đặt)
  *  - ZALO_APP_SECRET       "Khóa bí mật của ứng dụng" (trang Cài đặt)
- *  - ZALO_OA_SECRET_KEY    "OA secret" (trang Webhook), nếu tìm thấy trên
- *                           giao diện Zalo Developers của bạn. Nếu không có,
- *                           để trống — code sẽ tự dùng ZALO_APP_SECRET thay thế
+ *  - ZALO_OA_SECRET_KEY    "OA Secret Key" (hiện ra ở trang Webhook sau
+ *                           khi lưu URL lần đầu thành công)
  *  - ZALO_REFRESH_TOKEN    refresh_token gốc lấy 1 lần qua OAuth thủ công
  *  - ANTHROPIC_API_KEY     đã có sẵn cho /api/chat
- *
- * Cần Vercel KV đã kết nối vào project (xem src/lib/zalo-token.ts).
+ *  - KV_REST_API_URL / KV_REST_API_TOKEN   từ Upstash (qua Vercel Storage)
  */
 
 import { NextResponse, after } from "next/server";
@@ -45,13 +55,15 @@ function themVaoLichSu(userId: string, msg: ChatMessage) {
 
 /**
  * Công thức Zalo quy định: mac = sha256(app_id + rawBody + timestamp + OA_secret_key)
- * Đây là hash thường (không phải HMAC), bắt buộc dùng đúng raw body
- * (chuỗi JSON gốc Zalo gửi), không phải object đã parse rồi stringify lại.
+ * Header thực tế Zalo gửi có dạng "mac=<hash>", phải bỏ tiền tố "mac="
+ * trước khi so sánh (đã xác nhận qua log debug thực tế).
  */
-function chuKyHopLe(rawBody: string, timestamp: string, signature: string | null): boolean {
+function chuKyHopLe(rawBody: string, timestamp: string, signatureHeader: string | null): boolean {
   const appId = process.env.ZALO_APP_ID;
   const oaSecretKey = process.env.ZALO_OA_SECRET_KEY || process.env.ZALO_APP_SECRET;
-  if (!appId || !oaSecretKey || !signature || !timestamp) return false;
+  if (!appId || !oaSecretKey || !signatureHeader || !timestamp) return false;
+
+  const signature = signatureHeader.startsWith("mac=") ? signatureHeader.slice(4) : signatureHeader;
 
   const expected = crypto
     .createHash("sha256")
@@ -67,9 +79,7 @@ function chuKyHopLe(rawBody: string, timestamp: string, signature: string | null
 
 async function guiTinZalo(userId: string, text: string) {
   const accessToken = await layAccessTokenHopLe();
-
-  // Zalo giới hạn 2000 ký tự mỗi tin nhắn text.
-  const noiDung = text.slice(0, 2000);
+  const noiDung = text.slice(0, 2000); // Zalo giới hạn 2000 ký tự/tin
 
   const res = await fetch("https://openapi.zalo.me/v3.0/oa/message/cs", {
     method: "POST",
@@ -88,6 +98,22 @@ async function guiTinZalo(userId: string, text: string) {
   }
 }
 
+/** Xử lý AI + gửi trả lời — chạy NỀN sau khi đã trả response, không bao giờ throw ra ngoài. */
+async function xuLyVaTraLoi(userId: string) {
+  try {
+    const reply = await askClaude(lichSuTheoKhach.get(userId)!);
+    themVaoLichSu(userId, { role: "assistant", content: reply });
+    await guiTinZalo(userId, reply);
+  } catch (err) {
+    console.error("[zalo] Lỗi khi hỏi Claude hoặc gửi tin:", err);
+    try {
+      await guiTinZalo(userId, LOI_CHUNG);
+    } catch (errGui) {
+      console.error("[zalo] Gửi tin báo lỗi cũng thất bại:", errGui);
+    }
+  }
+}
+
 interface ZaloEventPayload {
   app_id?: string;
   oa_id?: string;
@@ -99,54 +125,36 @@ interface ZaloEventPayload {
 
 export async function POST(req: Request) {
   const rawBody = await req.text();
-  // Zalo gửi header dạng "mac=<hash>", không phải hash thuần — phải bỏ
-  // tiền tố "mac=" trước khi so sánh.
-  const rawSignature = req.headers.get("x-zevent-signature");
-  const signature = rawSignature?.startsWith("mac=") ? rawSignature.slice(4) : rawSignature;
+  const signatureHeader = req.headers.get("x-zevent-signature");
 
   let payload: ZaloEventPayload;
   try {
     payload = JSON.parse(rawBody);
   } catch {
-    return new NextResponse("Bad Request", { status: 400 });
+    // Body không phải JSON hợp lệ — vẫn trả 200 (có thể là request
+    // kiểm tra kết nối đơn thuần của Zalo), chỉ là không xử lý gì.
+    return new NextResponse("OK", { status: 200 });
   }
 
   const timestamp = payload.timestamp ?? "";
-  if (!chuKyHopLe(rawBody, timestamp, signature)) {
-    console.error("[zalo] Chữ ký không hợp lệ — có thể là request giả mạo.");
-    return new NextResponse("Invalid signature", { status: 403 });
-  }
+  const hopLe = chuKyHopLe(rawBody, timestamp, signatureHeader);
 
-  // Chỉ xử lý sự kiện khách gửi tin nhắn văn bản, bỏ qua các event khác
-  // (follow OA, thả icon, gửi ảnh...) để giữ code đơn giản trước mắt.
-  if (payload.event_name === "user_send_text") {
+  if (!hopLe) {
+    console.error(
+      "[zalo] Chữ ký không khớp hoặc thiếu — bỏ qua xử lý, vẫn trả 200 OK.",
+      JSON.stringify({ event_name: payload.event_name }),
+    );
+  } else if (payload.event_name === "user_send_text") {
     const userId = payload.sender?.id;
     const text = payload.message?.text;
 
     if (userId && text) {
       themVaoLichSu(userId, { role: "user", content: text });
-
-      // QUAN TRỌNG: gọi Claude + gửi trả lời mất vài giây — Zalo chờ
-      // phản hồi HTTP quá lâu sẽ báo "Không thể kết nối với webhook".
-      // Dùng after() để trả 200 OK ngay lập tức, còn việc trả lời khách
-      // chạy "phía sau" sau khi response đã gửi xong.
-      after(async () => {
-        try {
-          const reply = await askClaude(lichSuTheoKhach.get(userId)!);
-          themVaoLichSu(userId, { role: "assistant", content: reply });
-          await guiTinZalo(userId, reply);
-        } catch (err) {
-          console.error("[zalo] Lỗi khi hỏi Claude hoặc gửi tin:", err);
-          try {
-            await guiTinZalo(userId, LOI_CHUNG);
-          } catch (errGui) {
-            console.error("[zalo] Gửi tin báo lỗi cũng thất bại:", errGui);
-          }
-        }
-      });
+      // Xử lý AI + gửi trả lời SAU khi response này đã gửi xong,
+      // để Zalo không phải chờ và báo "Không thể kết nối".
+      after(() => xuLyVaTraLoi(userId));
     }
   }
 
-  // Trả 200 ngay cho Zalo biết đã nhận — không chờ xử lý AI xong.
   return new NextResponse("OK", { status: 200 });
 }
