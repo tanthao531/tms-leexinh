@@ -5,6 +5,7 @@ import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import StickyContactBar from "@/components/StickyContactBar";
 import ChatWidget from "@/components/ChatWidget";
+import PromoPopup from "@/components/PromoPopup";
 import { LodgingJsonLd } from "@/components/JsonLd";
 import { siteConfig } from "@/lib/site-config";
 
@@ -82,6 +83,7 @@ export default function RootLayout({
         <Footer />
         <StickyContactBar />
         <ChatWidget />
+        <PromoPopup />
       </body>
     </html>
   );
