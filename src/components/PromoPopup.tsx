@@ -15,8 +15,8 @@
  *     Zalo, hoặc để trống "" nếu ảnh chỉ để xem, không cần bấm).
  *   - PROMO_ENABLED: đổi thành false để tắt popup ngay lập tức mà không
  *     cần xoá ảnh.
- *   - Popup chỉ hiện 1 lần cho mỗi phiên truy cập (đóng rồi sẽ không hiện
- *     lại cho tới khi khách đóng hẳn trình duyệt / mở tab mới).
+ *   - Popup hiện lại MỖI LẦN tải trang (kể cả bấm F5/refresh), không giới
+ *     hạn số lần trong phiên truy cập.
  */
 
 import { useEffect, useState } from "react";
@@ -29,7 +29,6 @@ const PROMO_IMAGE = "/images/khuyen-mai/khuyen-mai.jpg";
 // Bấm vào ảnh sẽ dẫn tới trang đặt phòng (dùng chung link với nút "Đặt phòng
 // ngay" trong site-config.ts — đổi hệ thống đặt phòng ở đó thì popup tự theo).
 const PROMO_LINK = siteConfig.booking.engineUrl;
-const SESSION_KEY = "tms-promo-popup-dismissed";
 
 export default function PromoPopup() {
   const [imageOk, setImageOk] = useState(false);
@@ -39,9 +38,6 @@ export default function PromoPopup() {
   // không thể dùng fs như PlaceholderImage ở server component).
   useEffect(() => {
     if (!PROMO_ENABLED) return;
-
-    const alreadyDismissed = sessionStorage.getItem(SESSION_KEY) === "1";
-    if (alreadyDismissed) return;
 
     let cancelled = false;
     fetch(PROMO_IMAGE, { method: "HEAD" })
@@ -62,7 +58,6 @@ export default function PromoPopup() {
 
   const handleClose = () => {
     setOpen(false);
-    sessionStorage.setItem(SESSION_KEY, "1");
   };
 
   if (!PROMO_ENABLED || !imageOk || !open) return null;
